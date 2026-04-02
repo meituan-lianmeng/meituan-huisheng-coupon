@@ -135,17 +135,12 @@ def generate_device_token(seed: str) -> str:
     rand_int = random.randint(0, 1000)
     raw = f"{seed}{ts_ms}{rand_int}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
-
-
 # ── 存储操作 ──────────────────────────────────────────────────────────
-
 def load_auth() -> dict:
     if AUTH_FILE.exists():
         with open(AUTH_FILE, encoding="utf-8") as f:
             return json.load(f)
     return {}
-
-
 def save_auth(data: dict):
     import os, stat
     AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -156,18 +151,12 @@ def save_auth(data: dict):
         os.chmod(AUTH_FILE, stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
         pass  # Windows 不支持 chmod，静默跳过
-
-
 def get_token_data() -> dict:
     return load_auth().get(AUTH_KEY, {})
-
-
 def save_token_data(token_data: dict):
     auth = load_auth()
     auth[AUTH_KEY] = token_data
     save_auth(auth)
-
-
 def logout_token_data():
     """
     退出登录：仅将 user_token 置为空字符串。
@@ -179,17 +168,13 @@ def logout_token_data():
     entry["user_token"] = ""          # 置空，表示已退出登录
     auth[AUTH_KEY] = entry
     save_auth(auth)
-
-
 # ── 命令：status（本地检查，不调用接口）────────────────────────────────
-
 def cmd_status():
     """仅检查本地存储的 Token 是否存在，不调用远程接口，不做本地过期校验"""
     token_data = get_token_data()
     user_token = token_data.get("user_token")
     device_token = token_data.get("device_token")
     phone_masked = token_data.get("phone_masked", "")
-
     if user_token:
         print(json.dumps({
             "success": True,
@@ -208,18 +193,13 @@ def cmd_status():
             "phone_masked": phone_masked,
             "check_mode": "local"
         }, ensure_ascii=False))
-
-
 # ── 命令：token-verify（调用远程接口校验）─────────────────────────────
-
 def cmd_token_verify():
     """调用 /eds/claw/login/token/verify 验证 Token 有效性"""
     import httpx
-
     token_data = get_token_data()
     user_token = token_data.get("user_token")
     phone_masked = token_data.get("phone_masked", "")
-
     # 规则2：token-verify 时检查 device_token，不存在则用 phone_masked 生成并持久化
     existing_device_token = token_data.get("device_token")
     if not existing_device_token:
@@ -228,7 +208,6 @@ def cmd_token_verify():
         token_data["device_token"] = new_device_token
         save_token_data(token_data)
         existing_device_token = new_device_token
-
     if not user_token:
         print(json.dumps({
             "success": True,
@@ -239,19 +218,21 @@ def cmd_token_verify():
             "check_mode": "remote"
         }, ensure_ascii=False))
         return
-
     url = BASE_URL + TOKEN_VERIFY_PATH
     try:
         resp = httpx.post(
             url,
             params={"token": user_token},
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                "X-Requested-With": "XMLHttpRequest",
+                },
             timeout=10,
             verify=False
         )
         resp_data = resp.json()
         code = resp_data.get("code")
-
         if code == 0:
             # Token 有效
             print(json.dumps({
@@ -262,7 +243,6 @@ def cmd_token_verify():
                 "phone_masked": phone_masked,
                 "check_mode": "remote"
             }, ensure_ascii=False))
-
         elif code == 20005:
             # Token 不存在或已过期（服务端确认）
             # 规则4：只将 user_token 置为空字符串，不删除 device_token
@@ -276,7 +256,6 @@ def cmd_token_verify():
                 "check_mode": "remote",
                 "message": resp_data.get("message", "用户未登录或 Token 已过期，请重新登录")
             }, ensure_ascii=False))
-
         else:
             # 其他错误（如系统繁忙），不修改本地缓存，降级为本地检查
             print(json.dumps({
@@ -287,7 +266,6 @@ def cmd_token_verify():
                 "check_mode": "remote"
             }, ensure_ascii=False))
             sys.exit(1)
-
     except Exception as e:
         print(json.dumps({
             "success": False,
@@ -295,14 +273,10 @@ def cmd_token_verify():
             "message": str(e)
         }, ensure_ascii=False))
         sys.exit(1)
-
-
 # ── 命令：send-sms ────────────────────────────────────────────────────
-
 def cmd_send_sms(phone: str):
     """调用 /eds/claw/login/sms/code/get 发送验证码"""
     import httpx
-
     # 读取已有 device_token，若不存在则先生成（此时还无法用手机号生成，用 phone 即可）
     existing = get_token_data()
     existing_dt = existing.get("device_token")
@@ -314,24 +288,25 @@ def cmd_send_sms(phone: str):
         existing["device_token"] = uuid_val
         existing["phone_masked"] = phone[:3] + "****" + phone[-4:]
         save_token_data(existing)
-
     url = BASE_URL + SMS_CODE_GET_PATH
     body = {
         "mobile": phone,    # 接口字段名为 mobile
         "uuid": uuid_val    # 设备唯一标识，对接接口 uuid 扩展字段
     }
-
     try:
         resp = httpx.post(
             url,
             json=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                "X-Requested-With": "XMLHttpRequest",
+            },
             timeout=10,
             verify=False
         )
         resp_data = resp.json()
         code = resp_data.get("code")
-
         if code == 0:
             phone_masked = phone[:3] + "****" + phone[-4:]
             result = {
@@ -340,7 +315,6 @@ def cmd_send_sms(phone: str):
                 "message": f"验证码已发送至手机号 {phone_masked}，请打开手机短信查看验证码，60秒内有效"
             }
             print(json.dumps(result, ensure_ascii=False))
-
         elif code == 20001:
             # 手机号 Token 加密服务失败，服务端问题，稍后重试
             print(json.dumps({
@@ -350,7 +324,6 @@ def cmd_send_sms(phone: str):
                 "message": "短信服务暂时不可用，请稍后重试"
             }, ensure_ascii=False))
             sys.exit(1)
-
         elif code == 20002:
             # 频控：验证码已存在
             print(json.dumps({
@@ -360,7 +333,6 @@ def cmd_send_sms(phone: str):
                 "message": "短信验证码已发送，请1分钟后再试"
             }, ensure_ascii=False))
             sys.exit(1)
-
         elif code == 20004:
             # 手机号未注册美团
             print(json.dumps({
@@ -370,7 +342,6 @@ def cmd_send_sms(phone: str):
                 "message": "该手机号未注册美团，请先下载美团APP并完成注册登录"
             }, ensure_ascii=False))
             sys.exit(1)
-
         elif code == 20006:
             # 单手机号日限（默认5次/天）
             print(json.dumps({
@@ -380,7 +351,6 @@ def cmd_send_sms(phone: str):
                 "message": "该手机号今日发送短信次数已达上限，请明天再试"
             }, ensure_ascii=False))
             sys.exit(1)
-
         elif code == 20007:
             # 全局日限（默认1000条/天）
             print(json.dumps({
@@ -390,7 +360,6 @@ def cmd_send_sms(phone: str):
                 "message": "短信发送总次数已达今日上限，请明天再试"
             }, ensure_ascii=False))
             sys.exit(1)
-
         elif code == 20010:
             # Rhino 限流触发，需用户完成安全验证，data.redirectUrl 为跳转链接
             data = resp_data.get("data") or {}
@@ -407,7 +376,6 @@ def cmd_send_sms(phone: str):
                 ) if redirect_url else "需要完成安全验证，请稍后重试"
             }, ensure_ascii=False))
             sys.exit(1)
-
         else:
             print(json.dumps({
                 "success": False,
@@ -416,7 +384,6 @@ def cmd_send_sms(phone: str):
                 "message": resp_data.get("message", "验证码发送失败")
             }, ensure_ascii=False))
             sys.exit(1)
-
     except Exception as e:
         print(json.dumps({
             "success": False,
@@ -424,14 +391,10 @@ def cmd_send_sms(phone: str):
             "message": str(e)
         }, ensure_ascii=False))
         sys.exit(1)
-
-
 # ── 命令：verify ──────────────────────────────────────────────────────
-
 def cmd_verify(phone: str, code: str):
     """调用 /eds/claw/login/sms/code/verify 验证验证码，成功后写入 user_token"""
     import httpx
-
     # 读取 device_token，此时 send-sms 应已持久化，直接复用
     existing = get_token_data()
     existing_dt = existing.get("device_token")
@@ -453,13 +416,16 @@ def cmd_verify(phone: str, code: str):
         resp = httpx.post(
             url,
             json=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+               "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                "X-Requested-With": "XMLHttpRequest",
+            },
             timeout=10,
             verify=True
         )
         resp_data = resp.json()
         resp_code = resp_data.get("code")
-
         if resp_code == 0:
             # 成功，从 data.token 获取 Token
             data = resp_data.get("data") or {}
@@ -471,14 +437,11 @@ def cmd_verify(phone: str, code: str):
                     "message": "接口返回成功但 data.token 为空"
                 }, ensure_ascii=False))
                 sys.exit(1)
-
             phone_masked = phone[:3] + "****" + phone[-4:]
-
             # device_token：直接使用上方已确定的 uuid_val（send-sms 时已持久化，此处只做复用）
             # uuid_val 在本函数顶部已按"存在且不为空则复用，否则生成"的规则处理完毕
             device_token = uuid_val
             is_new_device = not bool(existing.get("device_token"))
-
             token_data = {
                 "user_token": user_token,
                 "device_token": device_token,
@@ -486,7 +449,6 @@ def cmd_verify(phone: str, code: str):
                 "authed_at": int(time.time())
             }
             save_token_data(token_data)
-
             result = {
                 "success": True,
                 "user_token": user_token,
@@ -498,7 +460,6 @@ def cmd_verify(phone: str, code: str):
                 result["device_token_generated"] = True
                 result["hint"] = "首次认证，device_token 已生成并持久化"
             print(json.dumps(result, ensure_ascii=False))
-
         elif resp_code == 20003:
             print(json.dumps({
                 "success": False,
@@ -507,7 +468,6 @@ def cmd_verify(phone: str, code: str):
                 "message": "短信验证码错误或已过期，请重新获取"
             }, ensure_ascii=False))
             sys.exit(1)
-
         elif resp_code == 20004:
             print(json.dumps({
                 "success": False,
@@ -516,7 +476,6 @@ def cmd_verify(phone: str, code: str):
                 "message": "该手机号未注册美团，请先下载美团APP并完成注册登录"
             }, ensure_ascii=False))
             sys.exit(1)
-
         else:
             print(json.dumps({
                 "success": False,
@@ -525,7 +484,6 @@ def cmd_verify(phone: str, code: str):
                 "message": resp_data.get("message", "验证失败，请重试")
             }, ensure_ascii=False))
             sys.exit(1)
-
     except Exception as e:
         print(json.dumps({
             "success": False,
@@ -533,19 +491,14 @@ def cmd_verify(phone: str, code: str):
             "message": str(e)
         }, ensure_ascii=False))
         sys.exit(1)
-
-
 # ── 命令：logout ──────────────────────────────────────────────────────
-
 def cmd_logout():
     """退出当前登录状态：仅将 user_token 置为空字符串，保留 device_token"""
     token_data = get_token_data()
     device_token = token_data.get("device_token")
     phone_masked = token_data.get("phone_masked", "")
-
     # 规则3+4：仅置空 user_token，device_token 保持不变
     logout_token_data()
-
     result = {
         "success": True,
         "message": "已退出登录，user_token 已清除，下次需重新验证登录",
@@ -553,10 +506,7 @@ def cmd_logout():
         "phone_masked": phone_masked
     }
     print(json.dumps(result, ensure_ascii=False))
-
-
 # ── 命令：clear-device-token ──────────────────────────────────────────
-
 def cmd_clear_device_token():
     """清除设备标识（device_token），同时清除 user_token 和 phone_masked。
     仅在用户明确输入「清除设备标识」时调用，退出登录不触发此操作。
@@ -564,15 +514,12 @@ def cmd_clear_device_token():
     import os, stat
     auth = load_auth()
     entry = auth.get(AUTH_KEY, {})
-
     had_device_token = bool(entry.get("device_token"))
-
     # 清除所有认证相关字段
     entry["user_token"] = ""
     entry["device_token"] = ""
     entry["phone_masked"] = ""
     auth[AUTH_KEY] = entry
-
     AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(AUTH_FILE, "w", encoding="utf-8") as f:
         json.dump(auth, f, ensure_ascii=False, indent=2)
@@ -580,48 +527,35 @@ def cmd_clear_device_token():
         os.chmod(AUTH_FILE, stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
         pass
-
     result = {
         "success": True,
         "message": "设备标识已清除，下次登录将生成新的 device_token",
         "device_token_cleared": had_device_token
     }
     print(json.dumps(result, ensure_ascii=False))
-
-
 # ── 入口 ──────────────────────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(description="美团C端用户Agent认证工具（内嵌于 huisheng-coupon-tool）")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
     # version-check
     p_vc = subparsers.add_parser("version-check", help="检查本地 Skill 版本，与远程广场版本对比")
     p_vc.add_argument("--remote", default="", help="从 Friday 广场获取到的远程版本号（可选）")
-
     # status - 本地检查
     subparsers.add_parser("status", help="本地检查 Token 是否存在")
-
     # token-verify - 远程校验
     subparsers.add_parser("token-verify", help="调用远程接口校验 Token 有效性")
-
     # send-sms
     p_sms = subparsers.add_parser("send-sms", help="发送短信验证码")
     p_sms.add_argument("--phone", required=True, help="手机号（11位）")
-
     # verify
     p_verify = subparsers.add_parser("verify", help="验证码核验并写入 Token")
     p_verify.add_argument("--phone", required=True, help="手机号（11位）")
     p_verify.add_argument("--code", required=True, help="6位短信验证码")
-
     # logout
     subparsers.add_parser("logout", help="退出登录，清除 user_token（保留 device_token）")
-
     # clear-device-token
     subparsers.add_parser("clear-device-token", help="清除设备标识（device_token），仅在用户明确要求时调用")
-
     args = parser.parse_args()
-
     if args.command == "version-check":
         cmd_version_check(args.remote)
     elif args.command == "status":
@@ -636,7 +570,5 @@ def main():
         cmd_logout()
     elif args.command == "clear-device-token":
         cmd_clear_device_token()
-
-
 if __name__ == "__main__":
     main()
