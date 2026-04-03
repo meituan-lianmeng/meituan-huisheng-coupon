@@ -11,10 +11,11 @@ description: >
 
 metadata:
   skillhub.creator: "lidongliang04"
-  skillhub.updater: "fanghao12"
-  skillhub.version: "V18"
+  skillhub.updater: "lidongliang04"
+  skillhub.version: "V23"
   skillhub.source: "FRIDAY Skillhub"
   skillhub.skill_id: "18484"
+  skillhub.high_sensitive: "false"
 ---
 
 # 美团惠省优惠助手
@@ -245,12 +246,21 @@ ISSUE_RESULT=$($PYTHON "$ISSUE_SCRIPT" --token "$USER_TOKEN")
 >⚠️ 重要注意事项：这里的时间必须使用北京时间（+8时区）！
 
 **定时触发后推送内容：**
-
+当收到定时提醒事件时，Agent 根据当前时间动态生成问候语，按以下模板推送：
 ```
-🎫 早上好！美团惠省新一波优惠券已上架，今天也有精彩活动～
+🎫 [问候语]！美团惠省新一波优惠券已上架，今天也有精彩活动～
 回复「领券」帮你一键领券+查看今日活动！
 ```
+> ⚠️问候语规则（根据触发时的北京时间判断）：
 
+  | 时间段|  问候语 |
+  | ------------- | -------|
+  | 06:00 - 11:59 | 早上好 🌅|
+  | 12:00 - 13:59 | 中午好 ☀️| 
+  | 14:00 - 17:59 | 下午好 ☀️| 
+  | 18:00 - 22:59 | 晚上好 🌙| 
+  | 23:00 - 05:59 | 夜深了 🌛| 
+  
 - 用户在收到定时推送的信息后，回复「领券/领/看看/好/好的/可以/下一步/确认」等正反馈的词语→ 自动执行 Step 1→2→3
 - 用户回复「取消提醒」→ 删除 cron，回复：「已取消每日领券提醒，想恢复随时告诉我 ✌️」
 
@@ -287,6 +297,14 @@ $PYTHON "$AUTH_SCRIPT" clear-device-token
 - 同时清除 `device_token`、`user_token` 和 `phone_masked`
 - 成功后提示：「设备标识已清除，下次登录将重新绑定新的设备标识。」
 - 执行后用户需重新登录才能使用
+
+---
+
+## 🔍 诊断功能（Doctor）
+
+**仅在用户明确说「惠省诊断」「惠省排查」「huisheng doctor」时触发**，不得自动触发。
+
+触发后读取并执行 [references/DOCTOR.md](references/DOCTOR.md)。
 
 ---
 
