@@ -17,6 +17,9 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'vendor'))
+import cliguard
 
 # ── 常量 ──────────────────────────────────────────────────────────────
 # 发券接口的域名
@@ -82,6 +85,9 @@ def format_coupon(c: dict) -> dict:
         "name": c.get("couponName", ""),
         "discount_info": discount_info,
         "valid_period": valid_period,
+        "priceLimit": price_limit,
+        "couponValue": coupon_value,
+        "tabName": c.get("tabName", ""),
     }
 
 
@@ -132,6 +138,108 @@ def write_log(entry: dict, ai_scene: str = ""):
         pass  # 日志写失败不影响主流程
 
 
+# ── 展示结果构建（独立方法，不需要时可整体删除） ──────────────────────────
+# 删除方式：删除 _build_count_str、_build_display_coupons、build_display_result
+# 三个函数，以及 main() 中 result 字典里的 count_str 和 display_coupons 两行赋值即可。
+
+_TAB_ORDER = ["外卖", "美食团购", "美团闪购", "休闲娱乐", "生活服务", "丽人医疗", "更多福利"]
+_TAB_DISPLAY = {"更多福利": "其他"}
+_SLOT_PLAN_BASE = [("外卖", 2), ("美食团购", 1), ("美团闪购", 1),
+                   ("休闲娱乐", 1), ("生活服务", 1), ("丽人医疗", 1)]
+
+
+def _build_count_str(coupons: list) -> str:
+    """
+    按 TAB_ORDER 对券列表分组计数，应用 TAB_DISPLAY 重命名，
+    生成形如「美食团购优惠券7张、休闲娱乐优惠券10张、其他优惠券2张」的字符串。
+    统计数量严格来自原始券列表，与展示表格无关。
+    """
+    tab_count: dict = {}
+    for c in coupons:
+        tab = c.get("tabName", "")
+        tab_count[tab] = tab_count.get(tab, 0) + 1
+
+    unknown_tabs = [t for t in tab_count if t not in _TAB_ORDER]
+    final_order = _TAB_ORDER[:6] + unknown_tabs + _TAB_ORDER[6:]
+
+    parts = []
+    for tab in final_order:
+        if tab not in tab_count:
+            continue
+        display_name = _TAB_DISPLAY.get(tab, tab)
+        parts.append(f"{display_name}优惠券{tab_count[tab]}张")
+    return "、".join(parts)
+
+
+def _build_display_coupons(coupons: list) -> list:
+    """
+    按 SLOT_PLAN 分槽 + fallback 补位，最多取 8 张用于展示。
+    排序规则：无门槛券优先，有门槛券按补贴率（couponValue/priceLimit）降序。
+    返回格式化后的券列表，字段与 format_coupon() 输出一致。
+    """
+    def sort_key(c):
+        pl = c.get("priceLimit")
+        if not pl:
+            return (0, 0)
+        return (1, -(c.get("couponValue", 0) / pl))
+
+    # 按 tabName 分组并排序
+    groups: dict = {}
+    for c in coupons:
+        tab = c.get("tabName", "")
+        groups.setdefault(tab, []).append(c)
+    for tab in groups:
+        groups[tab].sort(key=sort_key)
+
+    unknown_tabs = [t for t in groups if t not in _TAB_ORDER]
+    slot_plan = _SLOT_PLAN_BASE + [(t, 1) for t in unknown_tabs] + [("更多福利", 1)]
+
+    used: dict = {}
+    slots: list = []
+
+    # 第一轮：按 SLOT_PLAN 分配
+    for tab, quota in slot_plan:
+        if len(slots) >= 8:
+            break
+        taken = 0
+        for c in groups.get(tab, []):
+            if taken >= quota or len(slots) >= 8:
+                break
+            slots.append(c)
+            used[tab] = used.get(tab, 0) + 1
+            taken += 1
+
+    # 第二轮：fallback 补位至 8 张
+    fallback_order = ["外卖", "美食团购", "美团闪购", "休闲娱乐", "生活服务", "丽人医疗"] \
+                     + unknown_tabs + ["更多福利"]
+    while len(slots) < 8:
+        filled = False
+        for tab in fallback_order:
+            remaining = groups.get(tab, [])[used.get(tab, 0):]
+            if remaining:
+                slots.append(remaining[0])
+                used[tab] = used.get(tab, 0) + 1
+                filled = True
+                break
+        if not filled:
+            break
+
+    return slots
+
+
+def build_display_result(coupons: list) -> dict:
+    """
+    对外入口：接收格式化后的券列表，返回 count_str 和 display_coupons。
+    在 main() 的成功分支中调用，结果直接合并进输出 JSON。
+    """
+    return {
+        "count_str": _build_count_str(coupons),
+        "display_coupons": _build_display_coupons(coupons),
+    }
+
+# ── 展示结果构建 END ───────────────────────────────────────────────────
+
+
 def main():
     # 定义命令行入口，必须传入 --token 参数（用户登录后的 user_token）
     parser = argparse.ArgumentParser(description="私域领券 发券脚本")
@@ -145,6 +253,7 @@ def main():
     body = {
         "token": args.token,
         "aiScene": config.get("aiScene", ""),
+        "version":2
     }
 
     ai_scene = config.get("aiScene", "")
@@ -168,7 +277,8 @@ def main():
                 "X-Requested-With": "XMLHttpRequest",
             },
             timeout=15,
-            verify=True
+            verify=True,
+            trust_env=False
         )
         log_entry["response"] = {"http_status": resp.status_code, "body": resp.text[:500]}
         resp_data = resp.json()
@@ -200,11 +310,14 @@ def main():
         # ── 领券成功 ──────────────────────────────────────────────────
         coupon_list = data.get("couponList", [])
         formatted_coupons = [format_coupon(c) for c in coupon_list]
+        display = build_display_result(formatted_coupons)
         result = {
             "success": True,
             "code": 200,
             "coupon_count": len(formatted_coupons),
             "coupons": formatted_coupons,
+            "count_str": display["count_str"],           # 新增：分类计数字符串
+            "display_coupons": display["display_coupons"], # 新增：筛选后的展示券列表
             "activity_name": data.get("activityName", ""),
             "activity_link": data.get("activityLink", ""),
         }

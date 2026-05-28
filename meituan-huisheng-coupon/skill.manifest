@@ -1,0 +1,25 @@
+skill-manifest-version: 1
+skill-id: 4b0186689b661ded662b46889828856100e43f0d8cba77cfa60b18f97b6031e5
+
+files:
+  8d8b6163168036631dfefce899e9169f6742713ba952cbb79ce5c6d4bd197c49  SKILL.md
+  7050cc834d0af3bff27e977f05faa5d0b92862ac466dc26efd5fefc9b9bb7eb1  references/DOCTOR.md
+  c98732b403fdbef1ffcb804ec101385553f5a5bd8d6fb624d7ed0105e81aca04  scripts/__pycache__/auth.cpython-312.pyc
+  5924d03db1b182ce2f84fdc8dbfa9429d59c1d0e684879bf84b5435201b68877  scripts/__pycache__/diag_auth_log.cpython-312.pyc
+  2507c57b611cb2a1ecc8dc9f358c31bce303150c9a2ca7e76c6683d06e5086f1  scripts/__pycache__/diag_issue_log.cpython-312.pyc
+  7119066a6c16baed526adc67ad4273c4ded46a86d1a7cbb873df59b024d6f2df  scripts/__pycache__/issue.cpython-311.pyc
+  29b789fb06b8d1de402f6fffc3d20c9726ad20bc01e351833333092801d000b2  scripts/__pycache__/issue.cpython-312.pyc
+  d5c05c86123a45682a42b929a7deb9224e33bd0b0b6eb488dd330547a0397315  scripts/auth.py
+  b585a85925b28c0db3fbfc70757443f07947c0edc42dd58f33b0feb6cc5e47f9  scripts/config.json
+  208b18e0dbe59e7f5af8d492de34c2a81763da0cdc6d78e8b1ac6fdba6394e9f  scripts/diag_auth_log.py
+  da645c0b186f1a1a6fab938bb21d522f14ce70aa14c599de40d90344dd0702e0  scripts/diag_issue_log.py
+  b41bc43fc6e66a61a252473c9e30f6eac28d7e24d52208036a451700723bd2ba  scripts/issue.py
+  e405f9f7ff234c7d09f111a53fd5cb6a369ba402e5d0d338fd4fdd93dfd5cf48  scripts/mtuser-pt-passport-0.1.4.tgz
+  e8097f36c49a51a1ee76798d8d3535021ca68f1bc8098c3ef79b54377bd10a68  scripts/run.js
+  6927755fec5db17f4dfc29a970058b57c0a250054e85d83a7e16f056ede38c35  scripts/vendor/cliguard/__init__.py
+  94cbf59ebfd1888775f4e63ffba51fb33f1b7e4c15980d461d8502d2cc7bc2a7  scripts/vendor/cliguard/__pycache__/__init__.cpython-311.pyc
+  358be903f2046d113949e2d7ee275ec332253253931d7af8a3c0f9d5d85dca27  scripts/vendor/cliguard/__pycache__/__init__.cpython-37.pyc
+  2d4fc15a3360a8d7271e303f18bf92febd3f4e7bd8cdfb60d3fe876887a10be0  scripts/vendor/cliguard/js/cliguard-wrapper.js
+  eff1a324fdec2201ef021da00d02e64324cbf59e1328966718e4a43c6b6626cf  scripts/vendor/cliguard/js/cliguard.js
+  99f781a091ab69ef851a7a20802d413092171e94333603a6953afaaf5a7aeeff  scripts/vendor/cliguard/js/package.json
+  81787c23fb9cea6e6132236d93636ef11c92c6c6c07df05599f80b353f84158e  terms-of-service.md
