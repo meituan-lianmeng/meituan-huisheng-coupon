@@ -7,9 +7,9 @@ description: >
 metadata:
   skillhub.creator: "lidongliang04"
   skillhub.updater: "jiangxinyu10"
-  skillhub.version: "V7"
+  skillhub.version: "V29"
   skillhub.source: "FRIDAY Skillhub"
-  skillhub.skill_id: "71185"
+  skillhub.skill_id: "18484"
   skillhub.high_sensitive: "false"
 ---
 
@@ -110,7 +110,7 @@ node "$RUN_JS" init
 | `get-token [--env test\|prod]` | 获取缓存的用户 Token |
 | `auth-get-code [--env test\|prod]` | 获取授权链接 |
 | `auth-poll-token` | 轮询授权结果 |
-| `qrcode <url> [client_id]` | 生成二维码 PNG |
+| `qrcode <url>` | 获取二维码图片URL（服务端生成） |
 | `issue --token <t>` | 领券 |
 | `hotword --city-id <id>` | 热搜词查询 |
 | `search --keyword <kw> --lat <lat> --lng <lng> --token <t> --city-id <id> [--page N] [--query-id Q] [--request-id R] [--max-distance-km D]` | 商品搜索 |
@@ -206,11 +206,11 @@ node "$RUN_JS" auth-get-code
 生成二维码：
 
 ```bash
-node "$RUN_JS" qrcode "<auth_url>" "c6f50b5a1e2f4e2bb00a3e2f58df3ced"
+node "$RUN_JS" qrcode "<auth_url>"
 ```
 
 解析输出 JSON：
-- `ok: true, type: "image"` → 从 `path` 字段获取图片路径，用 Markdown 图片语法 `![二维码](<path>)` 展示
+- `ok: true, type: "image"` → 从 `imageUrl` 字段获取二维码图片URL，用 Markdown 图片语法 `![二维码](<imageUrl>)` 展示
 - `ok: false` → 仅展示文字链接
 
 向用户展示以下内容（原样输出，不可删减）：
@@ -651,27 +651,19 @@ node "$RUN_JS" order --product-id "<productId>" --poi-id "<poiId>" --token "$USE
 
 **下单成功**（`ok: true`，且 `success: true`）：
 
-解析返回 JSON，提取 `orderId` 和 `payUrl` 字段。
+解析返回 JSON，提取 `orderId`、`payUrl` 和 `payQrCodeImage` 字段。
 
-使用 `qrcode` 子命令生成支付二维码图片：
-
-```
-node "$RUN_JS" qrcode "$PAY_URL" "pay"
-```
-
-按以下顺序向用户输出：
-
-**第一步**，输出成功提示和扫码说明：
+向用户展示：
 
 > 🎉 下单成功！订单号：[orderId]
+>
+> 请用美团 App 扫描下方二维码完成支付：
+>
+> ![支付二维码]({payQrCodeImage})
+>
+> 📱 也可以在手机端美团 App 订单列表中自行支付～ [支付链接]({payUrl})
 
-请用美团 App 扫描下方二维码完成支付，也可在美团 App 订单列表中自行支付～
-
-**第二步**，紧接着渲染支付二维码（不要有多余文字间隔）：
-
-根据 `qrcode` 返回 JSON：
-- `ok: true, type: "image"` → 从 `path` 字段获取图片路径，用 Markdown 图片语法 `![支付二维码](<path>)` 展示
-- `ok: false` → 提示用户「二维码生成失败，请打开美团 App 在订单列表中完成支付」
+如果 `payQrCodeImage` 为空，则提示用户「请打开美团 App 在订单列表中完成支付」并附上 payUrl 链接。
 
 **下单失败**（`ok: false` 或 `success: false`）：
 

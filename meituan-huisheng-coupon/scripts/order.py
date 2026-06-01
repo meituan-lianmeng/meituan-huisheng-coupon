@@ -86,7 +86,8 @@ def place_order(product_id: str, poi_id: str, token: str,
             return {
                 "success": True,
                 "orderId": str(data_block.get("orderId", "")),
-                "payUrl": pay_url
+                "payUrl": pay_url,
+                "payQrCodeImage": data_block.get("payUrlQrCode", "")
             }
         else:
             return {

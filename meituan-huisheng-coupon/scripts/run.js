@@ -11,6 +11,7 @@
  *   get-token [--env test|prod]   获取缓存的用户Token
  *   auth-get-code [--env test|prod]  获取授权链接
  *   auth-poll-token               轮询授权结果
+ *   qrcode <url>                  获取二维码图片URL（服务端生成）
  *   qrcode <url> [client_id]      生成二维码PNG
  *   issue --token <t>             领券
  *   hotword --city-id <id>        热搜词查询
@@ -28,11 +29,14 @@ const { execSync, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const https = require('https');
 
 // ── 全局常量 ─────────────────────────────────────────────────
 const SCRIPTS_DIR = __dirname;
 const SKILL_DIR = path.dirname(SCRIPTS_DIR);
 const CLIENT_ID = 'c6f50b5a1e2f4e2bb00a3e2f58df3ced';
+const PT_PASSPORT_BIN = path.join(SCRIPTS_DIR, 'node_modules', '.bin', 'pt-passport');
+const AUTH_DIR = path.join(SKILL_DIR, '.auth');
 const PYTHON = findPython();
 
 // 动态获取 certifi 证书路径，用于修复 macOS Python SSL 证书问题
@@ -69,6 +73,7 @@ function runPython(scriptName, args) {
   const scriptPath = path.join(SCRIPTS_DIR, scriptName);
   const cmdArgs = [scriptPath, ...args];
   try {
+    try { fs.mkdirSync(AUTH_DIR, { recursive: true }); } catch (_) {}
     const sslEnv = CERT_FILE
       ? { SSL_CERT_FILE: CERT_FILE, REQUESTS_CA_BUNDLE: CERT_FILE }
       : {};
@@ -77,7 +82,9 @@ function runPython(scriptName, args) {
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: SCRIPTS_DIR,
-      env: Object.assign({}, process.env, sslEnv)
+      env: Object.assign({}, process.env, sslEnv, {
+        XIAOMEI_AUTH_FILE: path.join(AUTH_DIR, 'auth_tokens.json')
+      })
     });
     const stdout = (result.stdout || '').trim();
     if (result.status !== 0) {
@@ -95,11 +102,11 @@ function runPython(scriptName, args) {
 /** 执行 pt-passport CLI 命令，返回原始 stdout */
 function runPassport(args) {
   try {
-    const result = spawnSync('pt-passport', args, {
+    const result = spawnSync(PT_PASSPORT_BIN, args, {
       encoding: 'utf-8',
       timeout: 120000,
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: true
+      env: Object.assign({}, process.env, { HOME: SKILL_DIR })
     });
     return {
       exitCode: result.status,
@@ -129,6 +136,8 @@ function parseArgs(argv) {
   }
   return { args, positional };
 }
+
+
 
 // ── 子命令实现 ───────────────────────────────────────────────
 
@@ -165,7 +174,7 @@ commands.init = function () {
     fail('NPM_NOT_FOUND');
   }
 
-  // 5. pt-passport CLI 安装/更新
+  // 5. pt-passport CLI 本地安装/更新
   // ClawHub 会删除非文本文件（.tgz/.bin 等），因此将 tgz base64 编码为 .txt 存储
   // 查找优先级：.tgz（本地开发） > .txt（ClawHub 发布）
   let tgzFile = null;
@@ -202,17 +211,20 @@ commands.init = function () {
 
   let localVersion = '';
   try {
-    const res = spawnSync('pt-passport', ['--version'], { encoding: 'utf-8', timeout: 10000, stdio: 'pipe', shell: true });
+    const res = spawnSync(PT_PASSPORT_BIN, ['--version'], { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' });
     localVersion = (res.stdout || '').trim().split('\n').pop();
   } catch (_) { /* not installed */ }
 
   if (localVersion !== bundleVersion) {
     try {
-      execSync(`npm install -g "${tgzFile}" --save-exact --force`, { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
+      execSync(`npm install "${tgzFile}" --prefix "${SCRIPTS_DIR}" --save-exact --force`, { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
     } catch (_) {
       fail('INSTALL_FAILED');
     }
   }
+
+  // 6. 确保 .auth 目录存在
+  try { fs.mkdirSync(AUTH_DIR, { recursive: true }); } catch (_) {}
 
   out({ ok: true, scripts_dir: SCRIPTS_DIR, skill_dir: SKILL_DIR });
 };
@@ -307,92 +319,106 @@ commands['auth-poll-token'] = function () {
   out({ ok: false, error: 'POLL_FAILED', raw: stdout, stderr: res.stderr });
 };
 
+// ── CLIGuard 签名集成 ─────────────────────────────────────────
+
+function loadCliguard() {
+  const vendorPath = path.join(SCRIPTS_DIR, 'vendor', 'cliguard', 'js', 'cliguard.js');
+  const updatePath = path.join(
+    require('os').homedir(), '.cliguard', 'cliguard-updates', 'core', 'cliguard.js'
+  );
+  if (fs.existsSync(vendorPath)) return require(vendorPath);
+  if (fs.existsSync(updatePath)) return require(updatePath);
+  return null;
+}
+
+function addCommonParams(urlStr) {
+  try {
+    const cliguard = loadCliguard();
+    if (!cliguard || typeof cliguard.addCommonParams !== 'function') return urlStr;
+    const result = cliguard.addCommonParams(urlStr);
+    return (result && result.url) ? result.url : urlStr;
+  } catch (e) {
+    process.stderr.write('[run.js:addCommonParams] warning: ' + e.message + '\n');
+    return urlStr;
+  }
+}
+
+function makeSignHeaders(method, urlStr, bodyHash) {
+  try {
+    const cliguard = loadCliguard();
+    if (!cliguard || typeof cliguard.signRequest !== 'function') return {};
+    return cliguard.signRequest(method.toUpperCase(), urlStr, bodyHash || '') || {};
+  } catch (e) {
+    process.stderr.write('[run.js:makeSignHeaders] warning: ' + e.message + '\n');
+    return {};
+  }
+}
+
+function httpsPost(urlStr, bodyObj, extraHeaders) {
+  return new Promise(function (resolve, reject) {
+    const bodyStr = JSON.stringify(bodyObj);
+    const bodyBuf = Buffer.from(bodyStr, 'utf-8');
+    const hashSlice = bodyBuf.slice(0, 16200);
+    const bodyHash = crypto.createHash('md5').update(hashSlice).digest('hex');
+    const signedUrl = addCommonParams(urlStr);
+    const sigHeaders = makeSignHeaders('POST', signedUrl, bodyHash);
+    const parsed = new URL(signedUrl);
+    const options = {
+      hostname: parsed.hostname,
+      port: parsed.port || 443,
+      path: parsed.pathname + parsed.search,
+      method: 'POST',
+      headers: Object.assign({
+        'Content-Type': 'application/json',
+        'Content-Length': bodyBuf.length,
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+        'X-Requested-With': 'XMLHttpRequest'
+      }, sigHeaders, extraHeaders || {})
+    };
+    const req = https.request(options, function (res) {
+      const chunks = [];
+      res.on('data', function (chunk) { chunks.push(chunk); });
+      res.on('end', function () {
+        const body = Buffer.concat(chunks).toString('utf-8');
+        try { resolve({ status: res.statusCode, data: JSON.parse(body) }); }
+        catch (_) { resolve({ status: res.statusCode, data: null, raw: body }); }
+      });
+    });
+    req.on('error', function (e) { reject(e); });
+    req.setTimeout(15000, function () { req.destroy(); reject(new Error('TIMEOUT')); });
+    req.write(bodyBuf);
+    req.end();
+  });
+}
+
 /**
- * qrcode — 生成二维码 PNG
- * 用法: node run.js qrcode <url> [client_id]
+ * qrcode — 通过服务端接口获取二维码图片 URL
+ * 用法: node run.js qrcode <url>
+ * 调用 https://click.meituan.com/cps/ai/product/getQrCodeImage
  */
 commands.qrcode = function (argv) {
   const url = (argv || [])[0] || '';
-  const clientId = (argv || [])[1] || '';
 
   if (!url) {
     out({ ok: false, type: 'skip' });
     return;
   }
 
-  let imgFile;
-  let isRandFile = false;
+  const apiUrl = 'https://click.meituan.com/cps/ai/product/getQrCodeImage';
+  const body = { originalUrl: url, clientSource: 'coupon-fusion-firday' };
 
-  if (clientId) {
-    imgFile = path.join(SCRIPTS_DIR, `qrcode_${clientId}.png`);
-  } else {
-    const rand = crypto.randomBytes(4).toString('hex');
-    imgFile = path.join(SCRIPTS_DIR, `qrcode_${rand}.png`);
-    isRandFile = true;
-  }
-
-  // 退出时清理随机文件
-  function cleanup() {
-    if (isRandFile) {
-      try { fs.unlinkSync(imgFile); } catch (_) { /* ignore */ }
-    }
-  }
-  process.on('exit', cleanup);
-  process.on('SIGINT', () => { cleanup(); process.exit(1); });
-  process.on('SIGTERM', () => { cleanup(); process.exit(1); });
-
-  // 获取 npm 全局模块路径
-  let nodeGlobalModules = '';
-  try {
-    nodeGlobalModules = execSync('npm root -g', { encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-  } catch (_) { /* ignore */ }
-
-  // 注入全局模块搜索路径
-  if (nodeGlobalModules && fs.existsSync(nodeGlobalModules)) {
-    if (!module.paths.includes(nodeGlobalModules)) {
-      module.paths.push(nodeGlobalModules);
-    }
-  }
-
-  // 加载 qrcode 模块
-  let qr;
-  try {
-    qr = require('qrcode');
-  } catch (_) {
-    process.stderr.write('[run.js:qrcode] qrcode module not found, installing...\n');
-    try {
-      execSync('npm install -g qrcode', { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
-    } catch (__) {
-      out({ ok: false, type: 'skip' });
-      return;
-    }
-    try {
-      nodeGlobalModules = execSync('npm root -g', { encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-      if (nodeGlobalModules && !module.paths.includes(nodeGlobalModules)) {
-        module.paths.push(nodeGlobalModules);
+  httpsPost(apiUrl, body)
+    .then(function (resp) {
+      const data = resp.data;
+      if (data && data.data) {
+        out({ ok: true, type: 'image', imageUrl: data.data });
+      } else {
+        out({ ok: false, type: 'skip', message: 'No image returned', raw: data });
       }
-    } catch (__) { /* keep old */ }
-    try {
-      qr = require('qrcode');
-    } catch (__) {
-      out({ ok: false, type: 'skip' });
-      return;
-    }
-  }
-
-  // 生成 PNG（异步回调）
-  qr.toFile(imgFile, url, {
-    type: 'png',
-    width: 300,
-    margin: 2,
-    errorCorrectionLevel: 'M'
-  }, (err) => {
-    if (!err) {
-      out({ ok: true, type: 'image', path: imgFile });
-    } else {
-      out({ ok: false, type: 'skip' });
-    }
-  });
+    })
+    .catch(function (e) {
+      out({ ok: false, type: 'skip', message: e.message });
+    });
 };
 
 /**
@@ -528,7 +554,7 @@ Commands:
   get-token [--env test|prod]   Get cached user token
   auth-get-code [--env test|prod]  Get auth link
   auth-poll-token               Poll auth result
-  qrcode <url> [client_id]      Generate QR code PNG
+  qrcode <url>                  Get QR code image URL (server-side)
   issue --token <t>             Issue coupons
   hotword --city-id <id>        Hot search words
   search --keyword <kw> --lat <lat> --lng <lng> --token <t> --city-id <id>
