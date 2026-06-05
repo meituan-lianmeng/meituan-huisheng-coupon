@@ -8,17 +8,11 @@
  * 子命令:
  *   init                          环境初始化（Python检查 + npm检查 + pt-passport安装）
  *   get-device-token              获取设备标识
- *   get-token [--env test|prod]   获取缓存的用户Token
+ *   get-token                     获取缓存的用户Token
  *   auth-get-code [--env test|prod]  获取授权链接
  *   auth-poll-token               轮询授权结果
- *   qrcode <url>                  获取二维码图片URL（服务端生成）
- *   qrcode <url> [client_id]      生成二维码PNG
+ *   qrcode <url>                  生成二维码PNG
  *   issue --token <t>             领券
- *   hotword --city-id <id>        热搜词查询
- *   search --keyword <kw> --lat <lat> --lng <lng> --token <t> --city-id <id> [--page N] [--page-size N] [--query-id Q] [--request-id R] [--max-distance-km D]
- *   location --token <t>          获取用户近期位置
- *   location-by-address --address <addr>  根据地址获取经纬度
- *   order --product-id <pid> --poi-id <pid> --token <t> --city-id <id> --uuid <u> [--lat <lat>] [--lng <lng>] [--quantity N]
  *   logout                        退出登录
  *   clear-device-token            清除设备标识
  *
@@ -29,23 +23,12 @@ const { execSync, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const https = require('https');
 
 // ── 全局常量 ─────────────────────────────────────────────────
 const SCRIPTS_DIR = __dirname;
 const SKILL_DIR = path.dirname(SCRIPTS_DIR);
 const CLIENT_ID = 'c6f50b5a1e2f4e2bb00a3e2f58df3ced';
-const PT_PASSPORT_BIN = path.join(SCRIPTS_DIR, 'node_modules', '.bin', 'pt-passport');
-const AUTH_DIR = path.join(SKILL_DIR, '.auth');
 const PYTHON = findPython();
-
-// 动态获取 certifi 证书路径，用于修复 macOS Python SSL 证书问题
-// 若 certifi 未安装则为空字符串，Python 脚本使用系统默认证书
-const CERT_FILE = (() => {
-  try {
-    return execSync(`${PYTHON} -m certifi`, { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' }).trim();
-  } catch (_) { return ''; }
-})();
 
 // ── 工具函数 ─────────────────────────────────────────────────
 
@@ -73,18 +56,11 @@ function runPython(scriptName, args) {
   const scriptPath = path.join(SCRIPTS_DIR, scriptName);
   const cmdArgs = [scriptPath, ...args];
   try {
-    try { fs.mkdirSync(AUTH_DIR, { recursive: true }); } catch (_) {}
-    const sslEnv = CERT_FILE
-      ? { SSL_CERT_FILE: CERT_FILE, REQUESTS_CA_BUNDLE: CERT_FILE }
-      : {};
     const result = spawnSync(PYTHON, cmdArgs, {
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: SCRIPTS_DIR,
-      env: Object.assign({}, process.env, sslEnv, {
-        XIAOMEI_AUTH_FILE: path.join(AUTH_DIR, 'auth_tokens.json')
-      })
+      cwd: SCRIPTS_DIR
     });
     const stdout = (result.stdout || '').trim();
     if (result.status !== 0) {
@@ -102,11 +78,11 @@ function runPython(scriptName, args) {
 /** 执行 pt-passport CLI 命令，返回原始 stdout */
 function runPassport(args) {
   try {
-    const result = spawnSync(PT_PASSPORT_BIN, args, {
+    const result = spawnSync('pt-passport', args, {
       encoding: 'utf-8',
       timeout: 120000,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: Object.assign({}, process.env, { HOME: SKILL_DIR })
+      shell: true
     });
     return {
       exitCode: result.status,
@@ -136,8 +112,6 @@ function parseArgs(argv) {
   }
   return { args, positional };
 }
-
-
 
 // ── 子命令实现 ───────────────────────────────────────────────
 
@@ -211,20 +185,17 @@ commands.init = function () {
 
   let localVersion = '';
   try {
-    const res = spawnSync(PT_PASSPORT_BIN, ['--version'], { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' });
+    const res = spawnSync('pt-passport', ['--version'], { encoding: 'utf-8', timeout: 10000, stdio: 'pipe', shell: true });
     localVersion = (res.stdout || '').trim().split('\n').pop();
   } catch (_) { /* not installed */ }
 
   if (localVersion !== bundleVersion) {
     try {
-      execSync(`npm install "${tgzFile}" --prefix "${SCRIPTS_DIR}" --save-exact --force`, { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
+      execSync(`npm install -g "${tgzFile}" --save-exact --force`, { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
     } catch (_) {
       fail('INSTALL_FAILED');
     }
   }
-
-  // 6. 确保 .auth 目录存在
-  try { fs.mkdirSync(AUTH_DIR, { recursive: true }); } catch (_) {}
 
   out({ ok: true, scripts_dir: SCRIPTS_DIR, skill_dir: SKILL_DIR });
 };
@@ -319,106 +290,71 @@ commands['auth-poll-token'] = function () {
   out({ ok: false, error: 'POLL_FAILED', raw: stdout, stderr: res.stderr });
 };
 
-// ── CLIGuard 签名集成 ─────────────────────────────────────────
-
-function loadCliguard() {
-  const vendorPath = path.join(SCRIPTS_DIR, 'vendor', 'cliguard', 'js', 'cliguard.js');
-  const updatePath = path.join(
-    require('os').homedir(), '.cliguard', 'cliguard-updates', 'core', 'cliguard.js'
-  );
-  if (fs.existsSync(vendorPath)) return require(vendorPath);
-  if (fs.existsSync(updatePath)) return require(updatePath);
-  return null;
-}
-
-function addCommonParams(urlStr) {
-  try {
-    const cliguard = loadCliguard();
-    if (!cliguard || typeof cliguard.addCommonParams !== 'function') return urlStr;
-    const result = cliguard.addCommonParams(urlStr);
-    return (result && result.url) ? result.url : urlStr;
-  } catch (e) {
-    process.stderr.write('[run.js:addCommonParams] warning: ' + e.message + '\n');
-    return urlStr;
-  }
-}
-
-function makeSignHeaders(method, urlStr, bodyHash) {
-  try {
-    const cliguard = loadCliguard();
-    if (!cliguard || typeof cliguard.signRequest !== 'function') return {};
-    return cliguard.signRequest(method.toUpperCase(), urlStr, bodyHash || '') || {};
-  } catch (e) {
-    process.stderr.write('[run.js:makeSignHeaders] warning: ' + e.message + '\n');
-    return {};
-  }
-}
-
-function httpsPost(urlStr, bodyObj, extraHeaders) {
-  return new Promise(function (resolve, reject) {
-    const bodyStr = JSON.stringify(bodyObj);
-    const bodyBuf = Buffer.from(bodyStr, 'utf-8');
-    const hashSlice = bodyBuf.slice(0, 16200);
-    const bodyHash = crypto.createHash('md5').update(hashSlice).digest('hex');
-    const signedUrl = addCommonParams(urlStr);
-    const sigHeaders = makeSignHeaders('POST', signedUrl, bodyHash);
-    const parsed = new URL(signedUrl);
-    const options = {
-      hostname: parsed.hostname,
-      port: parsed.port || 443,
-      path: parsed.pathname + parsed.search,
-      method: 'POST',
-      headers: Object.assign({
-        'Content-Type': 'application/json',
-        'Content-Length': bodyBuf.length,
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'X-Requested-With': 'XMLHttpRequest'
-      }, sigHeaders, extraHeaders || {})
-    };
-    const req = https.request(options, function (res) {
-      const chunks = [];
-      res.on('data', function (chunk) { chunks.push(chunk); });
-      res.on('end', function () {
-        const body = Buffer.concat(chunks).toString('utf-8');
-        try { resolve({ status: res.statusCode, data: JSON.parse(body) }); }
-        catch (_) { resolve({ status: res.statusCode, data: null, raw: body }); }
-      });
-    });
-    req.on('error', function (e) { reject(e); });
-    req.setTimeout(15000, function () { req.destroy(); reject(new Error('TIMEOUT')); });
-    req.write(bodyBuf);
-    req.end();
-  });
-}
-
 /**
- * qrcode — 通过服务端接口获取二维码图片 URL
+ * qrcode — 生成二维码 PNG
  * 用法: node run.js qrcode <url>
- * 调用 https://click.meituan.com/cps/ai/product/getQrCodeImage
  */
 commands.qrcode = function (argv) {
   const url = (argv || [])[0] || '';
 
   if (!url) {
-    out({ ok: false, type: 'skip' });
+    out({ ok: false, type: 'skip', message: 'Missing URL' });
     return;
   }
 
-  const apiUrl = 'https://click.meituan.com/cps/ai/product/getQrCodeImage';
-  const body = { originalUrl: url, clientSource: 'coupon-fusion-firday' };
+  const imgFile = path.join(SCRIPTS_DIR, 'qrcode_huisheng.png');
 
-  httpsPost(apiUrl, body)
-    .then(function (resp) {
-      const data = resp.data;
-      if (data && data.data) {
-        out({ ok: true, type: 'image', imageUrl: data.data });
-      } else {
-        out({ ok: false, type: 'skip', message: 'No image returned', raw: data });
+  // 获取 npm 全局模块路径
+  let nodeGlobalModules = '';
+  try {
+    nodeGlobalModules = execSync('npm root -g', { encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  } catch (_) { /* ignore */ }
+
+  if (nodeGlobalModules && fs.existsSync(nodeGlobalModules)) {
+    if (!module.paths.includes(nodeGlobalModules)) {
+      module.paths.push(nodeGlobalModules);
+    }
+  }
+
+  // 加载 qrcode 模块
+  let qr;
+  try {
+    qr = require('qrcode');
+  } catch (_) {
+    process.stderr.write('[run.js:qrcode] qrcode module not found, installing...\n');
+    try {
+      execSync('npm install -g qrcode', { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
+    } catch (__) {
+      out({ ok: false, type: 'skip', message: 'Failed to install qrcode module' });
+      return;
+    }
+    try {
+      nodeGlobalModules = execSync('npm root -g', { encoding: 'utf-8', timeout: 10000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+      if (nodeGlobalModules && !module.paths.includes(nodeGlobalModules)) {
+        module.paths.push(nodeGlobalModules);
       }
-    })
-    .catch(function (e) {
-      out({ ok: false, type: 'skip', message: e.message });
-    });
+    } catch (__) { /* keep old */ }
+    try {
+      qr = require('qrcode');
+    } catch (__) {
+      out({ ok: false, type: 'skip', message: 'qrcode module still not available' });
+      return;
+    }
+  }
+
+  // 生成 PNG
+  qr.toFile(imgFile, url, {
+    type: 'png',
+    width: 300,
+    margin: 2,
+    errorCorrectionLevel: 'M'
+  }, (err) => {
+    if (!err) {
+      out({ ok: true, type: 'image', path: imgFile });
+    } else {
+      out({ ok: false, type: 'skip', message: err.message });
+    }
+  });
 };
 
 /**
@@ -429,97 +365,6 @@ commands.issue = function (argv) {
   const { args } = parseArgs(argv || []);
   if (!args['token']) fail('MISSING_PARAM', { param: 'token' });
   const result = runPython('issue.py', ['--token', args['token']]);
-  out(Object.assign({ ok: !!result.success }, result));
-};
-
-/**
- * hotword — 热搜词查询
- * 用法: node run.js hotword --city-id <id>
- */
-commands.hotword = function (argv) {
-  const { args } = parseArgs(argv || []);
-  if (!args['city-id']) fail('MISSING_PARAM', { param: 'city-id' });
-  const result = runPython('hotword.py', ['--city-id', args['city-id']]);
-  out(Object.assign({ ok: !!result.success }, result));
-};
-
-/**
- * search — 商品搜索
- * 用法: node run.js search --keyword <kw> --lat <lat> --lng <lng> --token <t> --city-id <id>
- *        [--page N] [--page-size N] [--query-id Q] [--request-id R] [--max-distance-km D]
- */
-commands.search = function (argv) {
-  const { args } = parseArgs(argv || []);
-  const required = ['keyword', 'lat', 'lng', 'token', 'city-id'];
-  for (const r of required) {
-    if (!args[r]) fail('MISSING_PARAM', { param: r });
-  }
-
-  const pyArgs = [
-    '--keyword', args['keyword'],
-    '--lat', args['lat'],
-    '--lng', args['lng'],
-    '--token', args['token'],
-    '--city-id', args['city-id']
-  ];
-
-  if (args['page'])           { pyArgs.push('--page', args['page']); }
-  if (args['page-size'])      { pyArgs.push('--page-size', args['page-size']); }
-  if (args['query-id'])       { pyArgs.push('--query-id', args['query-id']); }
-  if (args['request-id'])     { pyArgs.push('--request-id', args['request-id']); }
-  if (args['max-distance-km']) { pyArgs.push('--max-distance-km', args['max-distance-km']); }
-
-  const result = runPython('product_search.py', pyArgs);
-  out(Object.assign({ ok: !!result.success }, result));
-};
-
-/**
- * location — 获取用户近期位置
- * 用法: node run.js location --token <t>
- */
-commands.location = function (argv) {
-  const { args } = parseArgs(argv || []);
-  if (!args['token']) fail('MISSING_PARAM', { param: 'token' });
-  const result = runPython('get_user_recent_location.py', ['--token', args['token']]);
-  out(Object.assign({ ok: !!result.success }, result));
-};
-
-/**
- * location-by-address — 根据地址获取经纬度
- * 用法: node run.js location-by-address --address <addr>
- */
-commands['location-by-address'] = function (argv) {
-  const { args } = parseArgs(argv || []);
-  if (!args['address']) fail('MISSING_PARAM', { param: 'address' });
-  const result = runPython('get_location_by_address.py', ['--address', args['address']]);
-  out(Object.assign({ ok: !!result.success }, result));
-};
-
-/**
- * order — 下单
- * 用法: node run.js order --product-id <pid> --poi-id <pid> --token <t> --city-id <id> --uuid <u>
- *        [--lat <lat>] [--lng <lng>] [--quantity N]
- */
-commands.order = function (argv) {
-  const { args } = parseArgs(argv || []);
-  const required = ['product-id', 'poi-id', 'token', 'city-id', 'uuid'];
-  for (const r of required) {
-    if (!args[r]) fail('MISSING_PARAM', { param: r });
-  }
-
-  const pyArgs = [
-    '--product-id', args['product-id'],
-    '--poi-id', args['poi-id'],
-    '--token', args['token'],
-    '--city-id', args['city-id'],
-    '--uuid', args['uuid']
-  ];
-
-  if (args['lat'])      { pyArgs.push('--lat', args['lat']); }
-  if (args['lng'])      { pyArgs.push('--lng', args['lng']); }
-  if (args['quantity']) { pyArgs.push('--quantity', args['quantity']); }
-
-  const result = runPython('order.py', pyArgs);
   out(Object.assign({ ok: !!result.success }, result));
 };
 
@@ -554,13 +399,8 @@ Commands:
   get-token [--env test|prod]   Get cached user token
   auth-get-code [--env test|prod]  Get auth link
   auth-poll-token               Poll auth result
-  qrcode <url>                  Get QR code image URL (server-side)
+  qrcode <url>                  Generate QR code PNG
   issue --token <t>             Issue coupons
-  hotword --city-id <id>        Hot search words
-  search --keyword <kw> --lat <lat> --lng <lng> --token <t> --city-id <id>
-  location --token <t>          Get recent location
-  location-by-address --address <addr>  Get location by address
-  order --product-id <pid> --poi-id <pid> --token <t> --city-id <id> --uuid <u>
   logout                        Logout
   clear-device-token            Clear device token`);
   process.exit(0);
